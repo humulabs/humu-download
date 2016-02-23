@@ -89,29 +89,43 @@ class App(object):
         self.loop.run()
 
     def download_files(self, *args, **kwargs):
-        self.overall_progress.done = sum([f['size'] for f in self.files])
+        done = sum([f['size'] for f in self.files])
+        if done != 0:
+            self.overall_progress.done = done
         self.status('starting download ...')
         if not os.path.exists(self.dest_dir):
             os.makedirs(self.dest_dir)
 
         for f in self.files:
             self.download_file(f)
-        self.files = []
+
+        failures = [f for f in self.files if not f.get('success')]
+        if failures:
+            self.status('The following files could not be downloaded,' +
+                        ' please re-export your data and try again:\n  ' +
+                        '\n  '.join(f['name'] for f in failures))
+        else:
+            self.status('download complete')
         self.footer.set_text('q to exit')
-        self.status('download complete')
 
     def download_file(self, file):
-        filename = os.path.join(self.dest_dir, file['name'])
-        self.status('downloading {} ...'.format(filename))
+        file['hdf'] = os.path.join(self.dest_dir, file['name'])
+        self.status('downloading {} ...'.format(file['hdf']))
         r = requests.get(file['url'], stream=True)
+
+        try:
+            r.raise_for_status()
+        except:
+            return False
 
         estimated_size = file['size']
         actual_size = int(r.headers.get('content-length', 0))
         if actual_size != estimated_size:
             done = self.overall_progress.done + actual_size - estimated_size
-            self.overall_progress.add_progress(0, done=done)
+            if done != 0:
+                self.overall_progress.add_progress(0, done=done)
 
-        with open(filename, 'wb') as f:
+        with open(file['hdf'], 'wb') as f:
             self.file_progress.reset()
             self.file_progress.done = actual_size
             self.loop.draw_screen()
@@ -122,6 +136,10 @@ class App(object):
                 self.file_progress.add_progress(num_bytes)
                 self.overall_progress.add_progress(num_bytes)
                 self.loop.draw_screen()
+
+        file['download_complete'] = True
+        file['success'] = True
+        return True
 
 
 def main():
