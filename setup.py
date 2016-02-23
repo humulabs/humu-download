@@ -19,7 +19,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='humu-download',
-    version='1.0.0',
+    version='1.1.0',
     description='CLI and curses UI for dowloading Humu data files',
     long_description=__doc__,
     url='https://github.com/humulabs/humu-download/blob/master/README.rst',
@@ -30,7 +30,8 @@ setup(
     install_requires=[
         'docopt',
         'urwid_timed_progress>=1.1.1',
-        'requests'
+        'requests',
+        'pandas',
     ],
     entry_points={
         'console_scripts': ['humu-download=humu_download.main:main'],

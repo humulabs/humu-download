@@ -2,7 +2,7 @@
 Usage: humu-download [options] EXPORT-FILE
        humu-download -h
 
-Download Humu data files for a subject table export.
+Download Humu data files from a subject table export into CSV data files.
 
 Arguments:
   EXPORT-FILE   Humu subject export CSV file
@@ -15,11 +15,13 @@ Options:
                                named after the CSV file is used. The directory
                                is created if it does not exist. Any existing
                                data files in the directory are overwritten.
+  --keep-raw                   keep raw data files in addition to CSV
   -h --help                    show help
   -v --version                 show version
 """
 import docopt
 import requests
+import pandas
 import urwid
 from urwid_timed_progress import TimedProgressBar
 import csv
@@ -28,10 +30,11 @@ from . import __version__
 
 
 class App(object):
-    def __init__(self, files, dest_dir, chunk_size):
+    def __init__(self, files, dest_dir, chunk_size, keep_raw):
         self.files = [f for f in files if f.get('url')]
         self.dest_dir = dest_dir
         self.chunk_size = chunk_size
+        self.keep_raw = keep_raw
 
         palette = [
             ('normal', 'white', 'black', 'standout'),
@@ -99,14 +102,8 @@ class App(object):
         for f in self.files:
             self.download_file(f)
 
-        failures = [f for f in self.files if not f.get('success')]
-        if failures:
-            self.status('The following files could not be downloaded,' +
-                        ' please re-export your data and try again:\n  ' +
-                        '\n  '.join(f['name'] for f in failures))
-        else:
-            self.status('download complete')
-        self.footer.set_text('q to exit')
+        self.status('download complete')
+        self.convert_files()
 
     def download_file(self, file):
         file['hdf'] = os.path.join(self.dest_dir, file['name'])
@@ -119,27 +116,66 @@ class App(object):
             return False
 
         estimated_size = file['size']
-        actual_size = int(r.headers.get('content-length', 0))
-        if actual_size != estimated_size:
-            done = self.overall_progress.done + actual_size - estimated_size
+
+        file['actual_size'] = int(r.headers.get('content-length', 0))
+        if file['actual_size'] != estimated_size:
+            overall_done = (self.overall_progress.done +
+                            file['actual_size'] - estimated_size)
             if done != 0:
                 self.overall_progress.add_progress(0, done=done)
 
-        with open(file['hdf'], 'wb') as f:
-            self.file_progress.reset()
-            self.file_progress.done = actual_size
-            self.loop.draw_screen()
-
-            for chunk in r.iter_content(self.chunk_size):
-                f.write(chunk)
-                num_bytes = len(chunk)
-                self.file_progress.add_progress(num_bytes)
-                self.overall_progress.add_progress(num_bytes)
+        if file['actual_size'] != 0:
+            with open(file['hdf'], 'wb') as f:
+                self.file_progress.reset()
+                self.file_progress.done = file['actual_size']
                 self.loop.draw_screen()
 
+                for chunk in r.iter_content(self.chunk_size):
+                    f.write(chunk)
+                    num_bytes = len(chunk)
+                    self.file_progress.add_progress(num_bytes)
+                    self.overall_progress.add_progress(num_bytes)
+                    self.loop.draw_screen()
+
         file['download_complete'] = True
-        file['success'] = True
         return True
+
+    def convert_files(self):
+        files = [f for f in self.files if f.get('download_complete')]
+        done = sum([f['actual_size'] for f in files])
+        if done != 0:
+            self.overall_progress.done = done
+        self.status('converting data files to CSV')
+
+        for f in files:
+            self.convert_file(f)
+
+        failures = [f for f in self.files if not f.get('success')]
+        if failures:
+            self.status('Could not process the following files,' +
+                        ' please re-export your data and try again:\n  ' +
+                        '\n  '.join(f['name'] for f in failures))
+        else:
+            self.status('complete')
+        self.footer.set_text('q to exit')
+
+    def convert_file(self, file):
+        self.status('converting {} to CSV'.format(file['hdf']))
+        try:
+            df = pandas.read_hdf(file['hdf'], 'data')
+            file['csv'] = '{}.csv'.format(
+                os.path.join(self.dest_dir, file['name']))
+            df.to_csv(file['csv'],
+                      header=[file['data_series_name']],
+                      encoding='utf-8',
+                      index_label='datetime')
+            file['success'] = True
+            if not self.keep_raw:
+                os.remove(file['hdf'])
+        except Exception as e:
+            file['success'] = False
+
+        return file['success']
 
 
 def main():
@@ -167,9 +203,16 @@ def main():
                         else:
                             size = 0
                         name = '{}-{}-{}'.format(row['ID'], row['_id'], ds)
-                        files.append({'name': name, 'url': url, 'size': size})
+                        files.append({
+                            'data_series_name': ds,
+                            'name': name,
+                            'url': url,
+                            'size': size})
 
-        app = App(files, dest_dir, int(args['--chunk-size']))
+        app = App(files,
+                  dest_dir,
+                  int(args['--chunk-size']),
+                  args['--keep-raw'])
         app.run()
 
 
