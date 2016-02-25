@@ -64,14 +64,14 @@ class App(object):
 
         self._status = urwid.Text('')
 
-        progress = urwid.LineBox(urwid.Pile([
+        self.progress = urwid.LineBox(urwid.Pile([
             ('pack', self.file_progress),
             ('pack', urwid.Divider()),
             ('pack', self.overall_progress)]))
 
         self.footer = urwid.Text('Ctrl-C to abort')
         main_view = urwid.Frame(urwid.ListBox([
-            progress,
+            self.progress,
             urwid.Divider(),
             self._status]),
             footer=urwid.AttrWrap(self.footer, 'footer'))
@@ -142,12 +142,12 @@ class App(object):
 
     def convert_files(self):
         files = [f for f in self.files if f.get('download_complete')]
-        done = sum([f['actual_size'] for f in files])
-        if done != 0:
-            self.overall_progress.done = done
-        self.status('converting data files to CSV')
 
-        for f in files:
+        self.status('converting {} data files to CSV'.format(len(files)))
+
+        for idx, f in enumerate(files):
+            self.status('converting {} of {} to CSV\n{}'.format(
+                idx + 1, len(files), f['hdf']))
             self.convert_file(f)
 
         failures = [f for f in self.files if not f.get('success')]
@@ -160,7 +160,6 @@ class App(object):
         self.footer.set_text('q to exit')
 
     def convert_file(self, file):
-        self.status('converting {} to CSV'.format(file['hdf']))
         try:
             df = pandas.read_hdf(file['hdf'], 'data')
             file['csv'] = '{}.csv'.format(
