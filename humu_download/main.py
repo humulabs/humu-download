@@ -86,7 +86,7 @@ class App(object):
         body_view = urwid.ListBox(self.widgets)
         self.footer = urwid.Text('Ctrl-C to abort')
         app_view = urwid.Frame(body_view,
-                                footer=urwid.AttrWrap(self.footer, 'footer'))
+                               footer=urwid.AttrWrap(self.footer, 'footer'))
 
         def keypress(key):
             if key in ('q', 'Q'):
