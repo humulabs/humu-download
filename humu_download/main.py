@@ -62,24 +62,36 @@ class App(object):
                                                  units=units,
                                                  done=1)
 
+        self.convert_progress = TimedProgressBar('normal',
+                                                 'complete',
+                                                 label='',
+                                                 label_width=0,
+                                                 units=units,
+                                                 done=1)
+
         self._status = urwid.Text('')
 
-        self.progress = urwid.LineBox(urwid.Pile([
+        download_progress = urwid.LineBox(urwid.Pile([
             ('pack', self.file_progress),
             ('pack', urwid.Divider()),
-            ('pack', self.overall_progress)]))
+            ('pack', self.overall_progress)]),
+            title='Download Progress')
 
-        self.footer = urwid.Text('Ctrl-C to abort')
-        main_view = urwid.Frame(urwid.ListBox([
-            self.progress,
+        self.widgets = urwid.SimpleFocusListWalker([
+            download_progress,
             urwid.Divider(),
-            self._status]),
-            footer=urwid.AttrWrap(self.footer, 'footer'))
+            self._status,
+            ])
+
+        body_view = urwid.ListBox(self.widgets)
+        self.footer = urwid.Text('Ctrl-C to abort')
+        app_view = urwid.Frame(body_view,
+                                footer=urwid.AttrWrap(self.footer, 'footer'))
 
         def keypress(key):
             if key in ('q', 'Q'):
                 raise urwid.ExitMainLoop()
-        self.loop = urwid.MainLoop(main_view,
+        self.loop = urwid.MainLoop(app_view,
                                    palette,
                                    unhandled_input=keypress)
 
@@ -143,12 +155,24 @@ class App(object):
     def convert_files(self):
         files = [f for f in self.files if f.get('download_complete')]
 
-        self.status('converting {} data files to CSV'.format(len(files)))
+        done = sum([f['actual_size'] for f in files])
 
-        for idx, f in enumerate(files):
-            self.status('converting {} of {} to CSV\n{}'.format(
-                idx + 1, len(files), f['hdf']))
-            self.convert_file(f)
+        if done != 0:
+            self.convert_progress.add_progress(0, done=done)
+
+            # show convert progress just above status
+            self.widgets[-1:-1] = [
+                urwid.LineBox(self.convert_progress, title='Convert Progress'),
+                urwid.Divider()
+                ]
+
+            self.status('converting {} data files to CSV'.format(len(files)))
+
+            for idx, f in enumerate(files):
+                self.status('converting {} of {} to CSV\n\n{}'.format(
+                    idx + 1, len(files), f['hdf']))
+                self.convert_progress.add_progress(f['actual_size'])
+                self.convert_file(f)
 
         failures = [f for f in self.files if not f.get('success')]
         if failures:
