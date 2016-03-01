@@ -8,13 +8,14 @@ Arguments:
   EXPORT-FILE   Humu subject export CSV file
 
 Options:
-  -c --chunk-size=CHUNK-SIZE   number of bytes to process at a
-                               time [default: 4096]
+  --no-gui                     use plain text output only [default: false]
   -d --dest-dir=DEST-DIR       download destination directory. By default
                                a subdir of the current directory
                                named after the CSV file is used. The directory
                                is created if it does not exist. Any existing
                                data files in the directory are overwritten.
+  -c --chunk-size=CHUNK-SIZE   number of bytes to process at a
+                               time [default: 4096]
   --keep-raw                   keep raw data files in addition to CSV
   -h --help                    show help
   -v --version                 show version
@@ -35,6 +36,123 @@ class App(object):
         self.dest_dir = dest_dir
         self.chunk_size = chunk_size
         self.keep_raw = keep_raw
+
+    def download_files(self, *args, **kwargs):
+        done = sum([f['size'] for f in self.files])
+        if done != 0:
+            self.init_overall_progress(done)
+        self.status('starting download ...')
+        if not os.path.exists(self.dest_dir):
+            os.makedirs(self.dest_dir)
+
+        for f in self.files:
+            self.download_file(f)
+
+        self.status('download complete')
+        self.convert_files()
+
+    def convert_files(self):
+        files = [f for f in self.files if f.get('download_complete')]
+
+        done = sum([f['actual_size'] for f in files])
+
+        if done != 0:
+            self.init_convert_progress(done)
+
+            self.status('converting {} data files to CSV'.format(len(files)))
+
+            for idx, f in enumerate(files):
+                self.status('converting {} of {} to CSV\n\n{}'.format(
+                    idx + 1, len(files), f['hdf']))
+                self.convert_file(f)
+                self.update_convert_progress(f['actual_size'])
+
+        failures = [f for f in self.files if not f.get('success')]
+        if failures:
+            self.status('Could not process the following files,' +
+                        ' please re-export your data and try again:\n  ' +
+                        '\n  '.join(f['name'] for f in failures))
+        else:
+            self.status('complete')
+
+    def download_file(self, file):
+        file['hdf'] = os.path.join(self.dest_dir, file['name'])
+        self.status('downloading {} ...'.format(file['hdf']))
+        r = requests.get(file['url'], stream=True)
+
+        try:
+            r.raise_for_status()
+        except:
+            return False
+
+        estimated_size = file['size']
+
+        file['actual_size'] = int(r.headers.get('content-length', 0))
+        if file['actual_size'] != estimated_size:
+            overall_done = (self.overall_progress.done +
+                            file['actual_size'] - estimated_size)
+            if done != 0:
+                self.init_overall_progress(done)
+
+        if file['actual_size'] != 0:
+            with open(file['hdf'], 'wb') as f:
+                self.init_file_progress(file['actual_size'])
+
+                for chunk in r.iter_content(self.chunk_size):
+                    f.write(chunk)
+                    num_bytes = len(chunk)
+                    self.update_file_progress(num_bytes)
+
+        file['download_complete'] = True
+        return True
+
+    def convert_file(self, file):
+        try:
+            df = pandas.read_hdf(file['hdf'], 'data')
+            file['csv'] = '{}.csv'.format(
+                os.path.join(self.dest_dir, file['name']))
+            df.to_csv(file['csv'],
+                      header=[file['data_series_name']],
+                      encoding='utf-8',
+                      index_label='datetime')
+            file['success'] = True
+            if not self.keep_raw:
+                os.remove(file['hdf'])
+        except Exception as e:
+            file['success'] = False
+
+        return file['success']
+
+
+class TextApp(App):
+    def run(self):
+        self.download_files()
+
+    def status(self, msg):
+        print(msg)
+
+    def init_file_progress(self, size):
+        pass
+
+    def init_overall_progress(self, size):
+        pass
+
+    def update_overall_progress(self, size):
+        pass
+
+    def update_file_progress(self, size):
+        pass
+
+    def init_convert_progress(self, done):
+        pass
+
+    def update_convert_progress(self, size):
+        pass
+
+
+class GuiApp(App):
+    def __init__(self, *args, **kwargs):
+        super(GuiApp, self).__init__(*args, **kwargs)
 
         palette = [
             ('normal', 'white', 'black', 'standout'),
@@ -103,102 +221,40 @@ class App(object):
         self.loop.set_alarm_in(0.1, self.download_files)
         self.loop.run()
 
-    def download_files(self, *args, **kwargs):
-        done = sum([f['size'] for f in self.files])
-        if done != 0:
-            self.overall_progress.done = done
-        self.status('starting download ...')
-        if not os.path.exists(self.dest_dir):
-            os.makedirs(self.dest_dir)
+    def init_file_progress(self, size):
+        self.file_progress.reset()
+        self.file_progress.done = size
+        self.loop.draw_screen()
 
-        for f in self.files:
-            self.download_file(f)
+    def init_overall_progress(self, size):
+        self.overall_progress.reset()
+        self.overall_progress.done = size
+        self.loop.draw_screen()
 
-        self.status('download complete')
-        self.convert_files()
+    def update_overall_progress(self, size):
+        self.overall_progress.add_progress(size)
+        self.loop.draw_screen()
 
-    def download_file(self, file):
-        file['hdf'] = os.path.join(self.dest_dir, file['name'])
-        self.status('downloading {} ...'.format(file['hdf']))
-        r = requests.get(file['url'], stream=True)
+    def update_file_progress(self, size):
+        self.file_progress.add_progress(size)
+        self.update_overall_progress(size)
+        self.loop.draw_screen()
 
-        try:
-            r.raise_for_status()
-        except:
-            return False
+    def init_convert_progress(self, done):
+        self.convert_progress.add_progress(0, done=done)
 
-        estimated_size = file['size']
+        # show convert progress just above status
+        self.widgets[-1:-1] = [
+            urwid.LineBox(self.convert_progress, title='Convert Progress'),
+            urwid.Divider()
+            ]
 
-        file['actual_size'] = int(r.headers.get('content-length', 0))
-        if file['actual_size'] != estimated_size:
-            overall_done = (self.overall_progress.done +
-                            file['actual_size'] - estimated_size)
-            if done != 0:
-                self.overall_progress.add_progress(0, done=done)
-
-        if file['actual_size'] != 0:
-            with open(file['hdf'], 'wb') as f:
-                self.file_progress.reset()
-                self.file_progress.done = file['actual_size']
-                self.loop.draw_screen()
-
-                for chunk in r.iter_content(self.chunk_size):
-                    f.write(chunk)
-                    num_bytes = len(chunk)
-                    self.file_progress.add_progress(num_bytes)
-                    self.overall_progress.add_progress(num_bytes)
-                    self.loop.draw_screen()
-
-        file['download_complete'] = True
-        return True
+    def update_convert_progress(self, size):
+        self.convert_progress.add_progress(size)
 
     def convert_files(self):
-        files = [f for f in self.files if f.get('download_complete')]
-
-        done = sum([f['actual_size'] for f in files])
-
-        if done != 0:
-            self.convert_progress.add_progress(0, done=done)
-
-            # show convert progress just above status
-            self.widgets[-1:-1] = [
-                urwid.LineBox(self.convert_progress, title='Convert Progress'),
-                urwid.Divider()
-                ]
-
-            self.status('converting {} data files to CSV'.format(len(files)))
-
-            for idx, f in enumerate(files):
-                self.status('converting {} of {} to CSV\n\n{}'.format(
-                    idx + 1, len(files), f['hdf']))
-                self.convert_progress.add_progress(f['actual_size'])
-                self.convert_file(f)
-
-        failures = [f for f in self.files if not f.get('success')]
-        if failures:
-            self.status('Could not process the following files,' +
-                        ' please re-export your data and try again:\n  ' +
-                        '\n  '.join(f['name'] for f in failures))
-        else:
-            self.status('complete')
+        App.convert_files(self)
         self.footer.set_text('q to exit')
-
-    def convert_file(self, file):
-        try:
-            df = pandas.read_hdf(file['hdf'], 'data')
-            file['csv'] = '{}.csv'.format(
-                os.path.join(self.dest_dir, file['name']))
-            df.to_csv(file['csv'],
-                      header=[file['data_series_name']],
-                      encoding='utf-8',
-                      index_label='datetime')
-            file['success'] = True
-            if not self.keep_raw:
-                os.remove(file['hdf'])
-        except Exception as e:
-            file['success'] = False
-
-        return file['success']
 
 
 def main():
@@ -232,10 +288,14 @@ def main():
                             'url': url,
                             'size': size})
 
-        app = App(files,
-                  dest_dir,
-                  int(args['--chunk-size']),
-                  args['--keep-raw'])
+        if os.name != 'posix' or args['--no-gui']:
+            app_class = TextApp
+        else:
+            app_class = GuiApp
+        app = app_class(files,
+                        dest_dir,
+                        int(args['--chunk-size']),
+                        args['--keep-raw'])
         app.run()
 
 
