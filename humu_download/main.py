@@ -27,15 +27,41 @@ import urwid
 from urwid_timed_progress import TimedProgressBar
 import csv
 import os
+import glob
+import zipfile
+import shutil
 from . import __version__
 
 
 class App(object):
-    def __init__(self, files, dest_dir, chunk_size, keep_raw):
-        self.files = [f for f in files if f.get('url')]
+    def __init__(self, csv_file, dest_dir, chunk_size, keep_raw):
+        self.csv_file = csv_file
         self.dest_dir = dest_dir
         self.chunk_size = chunk_size
         self.keep_raw = keep_raw
+
+    def read_csv_file(self):
+        self.files = []
+        with open(self.csv_file, 'r') as f:
+            lines = (line for line in f if not line.lstrip().startswith('#'))
+            reader = csv.DictReader(lines)
+            for row in reader:
+                for key in row.keys():
+                    if key.endswith('_url'):
+                        ds = key.rsplit('_', 1)[0]
+                        url = row[key]
+                        if url:
+                            size = row['{}_size'.format(ds)]
+                            if size:
+                                size = int(size)
+                            else:
+                                size = 0
+                            name = '{}-{}-{}'.format(row['ID'], row['_id'], ds)
+                            self.files.append({
+                                'data_series_name': ds,
+                                'name': name,
+                                'url': url,
+                                'size': size})
 
     def download_files(self, *args, **kwargs):
         done = sum([f['size'] for f in self.files])
@@ -49,7 +75,7 @@ class App(object):
             self.download_file(f)
 
         self.status('download complete')
-        self.convert_files()
+        return self.convert_files()
 
     def convert_files(self):
         files = [f for f in self.files if f.get('download_complete')]
@@ -74,6 +100,7 @@ class App(object):
                         '\n  '.join(f['name'] for f in failures))
         else:
             self.status('complete')
+            return True
 
     def download_file(self, file):
         file['hdf'] = os.path.join(self.dest_dir, file['name'])
@@ -89,8 +116,8 @@ class App(object):
 
         file['actual_size'] = int(r.headers.get('content-length', 0))
         if file['actual_size'] != estimated_size:
-            overall_done = (self.overall_progress.done +
-                            file['actual_size'] - estimated_size)
+            done = (self.overall_progress.done +
+                    file['actual_size'] - estimated_size)
             if done != 0:
                 self.init_overall_progress(done)
 
@@ -126,7 +153,8 @@ class App(object):
 
 class TextApp(App):
     def run(self):
-        self.download_files()
+        self.read_csv_file()
+        return self.download_files()
 
     def status(self, msg):
         print(msg)
@@ -148,6 +176,31 @@ class TextApp(App):
 
     def update_convert_progress(self, size):
         pass
+
+    def download_file(self, file):
+        file['hdf'] = os.path.join(self.dest_dir, file['name'])
+        self.status('downloading {} ...'.format(file['hdf']))
+        r = requests.get(file['url'], stream=True)
+
+        try:
+            r.raise_for_status()
+        except:
+            return False
+
+        estimated_size = file['size']
+
+        file['actual_size'] = int(r.headers.get('content-length', 0))
+        if file['actual_size'] != 0:
+            with open(file['hdf'], 'wb') as f:
+                self.init_file_progress(file['actual_size'])
+
+                for chunk in r.iter_content(self.chunk_size):
+                    f.write(chunk)
+                    num_bytes = len(chunk)
+                    self.update_file_progress(num_bytes)
+
+        file['download_complete'] = True
+        return True
 
 
 class GuiApp(App):
@@ -218,6 +271,7 @@ class GuiApp(App):
         self.loop.draw_screen()
 
     def run(self):
+        self.read_csv_file()
         self.loop.set_alarm_in(0.1, self.download_files)
         self.loop.run()
 
@@ -256,43 +310,83 @@ class GuiApp(App):
         App.convert_files(self)
         self.footer.set_text('q to exit')
 
+    def download_file(self, file):
+        file['hdf'] = os.path.join(self.dest_dir, file['name'])
+        self.status('downloading {} ...'.format(file['hdf']))
+        r = requests.get(file['url'], stream=True)
+
+        try:
+            r.raise_for_status()
+        except:
+            return False
+
+        estimated_size = file['size']
+
+        file['actual_size'] = int(r.headers.get('content-length', 0))
+        if file['actual_size'] != estimated_size:
+            done = (self.overall_progress.done +
+                    file['actual_size'] - estimated_size)
+            if done != 0:
+                self.init_overall_progress(done)
+
+        if file['actual_size'] != 0:
+            with open(file['hdf'], 'wb') as f:
+                self.init_file_progress(file['actual_size'])
+
+                for chunk in r.iter_content(self.chunk_size):
+                    f.write(chunk)
+                    num_bytes = len(chunk)
+                    self.update_file_progress(num_bytes)
+
+        file['download_complete'] = True
+        return True
+
+
+def zipdir(path, ziph):
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            ziph.write(os.path.join(root, file))
+
 
 def main():
     args = docopt.docopt(__doc__,
                          version='humu-download {}'.format(__version__))
     csv_file = args['EXPORT-FILE']
 
-    dest_dir = args.get('--dest-dir')
-    if not dest_dir:
-        dest_dir = os.path.splitext(os.path.basename(csv_file))[0]
+    # batch export mode
+    # If csv_file is actually a directory download all of the CSV files in
+    # each of its subdirs
+    if os.path.isdir(csv_file):
+        csv_files = glob.glob('{}/*/*.csv'.format(csv_file))
+        for csv_file in csv_files:
+            dest_dir = os.path.join(os.path.dirname(csv_file), 'to_zip')
+            app = TextApp(csv_file,
+                          os.path.join(dest_dir, 'data'),
+                          int(args['--chunk-size']),
+                          False)
+            if app.run():
+                os.rename(csv_file,
+                          os.path.join(os.path.dirname(csv_file),
+                                       'to_zip',
+                                       os.path.basename(csv_file)))
+                zip_filename = os.path.join(
+                    os.path.join(os.path.dirname(csv_file)),
+                    os.path.splitext(os.path.basename(csv_file))[0] + '.zip')
+                zipf = zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED)
+                zipdir(dest_dir, zipf)
+                zipf.close()
+                shutil.rmtree(dest_dir, ignore_errors=True)
 
-    with open(csv_file, 'r') as f:
-        lines = (line for line in f if not line.lstrip().startswith('#'))
-        reader = csv.DictReader(lines)
-        files = []
-        for row in reader:
-            for key in row.keys():
-                if key.endswith('_url'):
-                    ds = key.rsplit('_', 1)[0]
-                    url = row[key]
-                    if url:
-                        size = row['{}_size'.format(ds)]
-                        if size:
-                            size = int(size)
-                        else:
-                            size = 0
-                        name = '{}-{}-{}'.format(row['ID'], row['_id'], ds)
-                        files.append({
-                            'data_series_name': ds,
-                            'name': name,
-                            'url': url,
-                            'size': size})
+    else:
+        dest_dir = args.get('--dest-dir')
+        if not dest_dir:
+            dest_dir = os.path.splitext(os.path.basename(csv_file))[0]
 
         if os.name != 'posix' or args['--no-gui']:
             app_class = TextApp
         else:
             app_class = GuiApp
-        app = app_class(files,
+        app = app_class(csv_file,
                         dest_dir,
                         int(args['--chunk-size']),
                         args['--keep-raw'])

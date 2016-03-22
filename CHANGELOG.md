@@ -1,6 +1,11 @@
 # Change Log
 This project uses [Semantic Versioning](http://semver.org/).
 
+## [**1.1.2**](https://github.com/humulabs/humu-download/releases/tag/v1.1.2) - 2016-03-22
+
+### Added
+- support downloading directory of projects, organized by user
+
 ## [**1.1.1**](https://github.com/humulabs/humu-download/releases/tag/v1.1.1) - 2016-03-01
 
 ### Fixed
