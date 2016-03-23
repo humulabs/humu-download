@@ -59,7 +59,7 @@ class App(object):
                             name = '{}-{}-{}'.format(row['ID'], row['_id'], ds)
                             self.files.append({
                                 'data_series_name': ds,
-                                'name': name,
+                                'name': name.replace('/', '_'),
                                 'url': url,
                                 'size': size})
 

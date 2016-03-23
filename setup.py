@@ -19,7 +19,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='humu-download',
-    version='1.1.2',
+    version='1.1.4',
     description='CLI and curses UI for dowloading Humu data files',
     long_description=__doc__,
     url='https://github.com/humulabs/humu-download/blob/master/README.rst',

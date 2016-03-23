@@ -1,6 +1,11 @@
 # Change Log
 This project uses [Semantic Versioning](http://semver.org/).
 
+## [**1.1.4**](https://github.com/humulabs/humu-download/releases/tag/v1.1.4) - 2016-03-23
+
+### Fixed
+- handle data file names with "/" characters by converting to "_" characters
+
 ## [**1.1.2**](https://github.com/humulabs/humu-download/releases/tag/v1.1.2) - 2016-03-22
 
 ### Added
